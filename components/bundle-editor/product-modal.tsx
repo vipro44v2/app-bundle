@@ -1,310 +1,309 @@
 "use client";
-
+import Text from "@/components/localization/text";
 import Image from "next/image";
 import { Package, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
+import { currencyFormatter } from "@/lib/bundle/pricing";
 import type { CatalogProduct, ProductPage } from "@/types/product";
-import { isApiError } from "@/types/api";
-
-type ModalProduct = Omit<CatalogProduct, "available"> & { available?: boolean };
-type Props = {
-  catalog: ModalProduct[];
-  initialCursor: string | null;
-  selected: string[];
-  onApply: (ids: string[]) => void;
-  onProductsLoaded: (products: ModalProduct[]) => void;
-  close: () => void;
-};
-
-function ProductVisual({ product }: { product: ModalProduct }) {
-  return (
-    <span className="product-image" style={{ background: product.color }}>
-      {product.image ? (
-        <Image src={product.image} alt="" width={48} height={48} />
-      ) : (
-        product.emoji
-      )}
-    </span>
-  );
-}
-
 export default function ProductModal({
   catalog,
-  initialCursor,
   selected,
+  currency,
   onApply,
   onProductsLoaded,
   close,
-}: Props) {
+}: {
+  catalog: CatalogProduct[];
+  initialCursor: string | null;
+  selected: string[];
+  currency: string;
+  onApply: (ids: string[]) => void;
+  onProductsLoaded: (products: CatalogProduct[]) => void;
+  close: () => void;
+}) {
   const [query, setQuery] = useState("");
-  const [draftSelected, setDraftSelected] = useState(selected);
-  const [results, setResults] = useState(catalog);
-  const [nextCursor, setNextCursor] = useState(initialCursor);
-  const [loading, setLoading] = useState(false);
+  const [draft, setDraft] = useState(selected);
+  const [results, setResults] = useState<CatalogProduct[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const initialCatalogRef = useRef(catalog);
-
+  const [retry, setRetry] = useState(0);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const controller = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const pending = useRef(false);
+  const money = currencyFormatter(currency);
   useEffect(() => {
-    const previous =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    searchRef.current?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        close();
-        return;
-      }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const items = [
-        ...dialogRef.current.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-        ),
-      ];
-      if (!items.length) return;
-      if (event.shiftKey && document.activeElement === items[0]) {
-        event.preventDefault();
-        items.at(-1)?.focus();
-      } else if (!event.shiftKey && document.activeElement === items.at(-1)) {
-        event.preventDefault();
-        items[0].focus();
-      }
-    };
-    document.addEventListener("keydown", keydown);
+    const previous = document.activeElement as HTMLElement | null;
+    const element = dialog.current;
+    element?.showModal();
     return () => {
-      document.removeEventListener("keydown", keydown);
+      element?.close();
       previous?.focus();
+      controller.current?.abort();
     };
-  }, [close]);
-
+  }, []);
   useEffect(() => {
-    const normalized = query.trim();
-    if (!normalized) {
-      setResults(initialCatalogRef.current);
-      setNextCursor(initialCursor);
-      setError("");
-      return;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const response = await fetch(
-          `/api/shopify/products?query=${encodeURIComponent(normalized)}`,
-          { signal: controller.signal },
-        );
-        const payload: unknown = await response.json();
-        if (!response.ok || isApiError(payload))
-          throw new Error(
-            isApiError(payload) ? payload.error : "Unable to search products",
-          );
-        const page = payload as ProductPage;
-        setResults(page.products);
-        setNextCursor(page.nextCursor);
-        onProductsLoaded(page.products);
-      } catch (reason) {
-        if (!controller.signal.aborted)
-          setError(
-            reason instanceof Error
-              ? reason.message
-              : "Unable to search products",
-          );
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }, 300);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [initialCursor, onProductsLoaded, query]);
-
-  const loadMore = async () => {
-    if (!nextCursor || loading) return;
+    controller.current?.abort();
+    const current = new AbortController();
+    controller.current = current;
+    const version = ++generation.current;
+    pending.current = true;
     setLoading(true);
     setError("");
+    setCursor(null);
+    const timer = setTimeout(
+      async () => {
+        try {
+          const page = await adminFetch<ProductPage>(
+            "/api/shopify/products?query=" + encodeURIComponent(query.trim()),
+            { signal: current.signal },
+          );
+          if (current.signal.aborted || generation.current !== version) return;
+          setResults(page.products);
+          setCursor(page.nextCursor);
+          onProductsLoaded(page.products);
+        } catch (reason) {
+          if (!current.signal.aborted)
+            setError(
+              reason instanceof Error
+                ? reason.message
+                : "Unable to load products",
+            );
+        } finally {
+          if (!current.signal.aborted) {
+            pending.current = false;
+            setLoading(false);
+          }
+        }
+      },
+      query.trim() ? 300 : 0,
+    );
+    return () => {
+      clearTimeout(timer);
+      current.abort();
+    };
+  }, [query, retry, onProductsLoaded]);
+  const more = async () => {
+    if (!cursor || pending.current) return;
+    pending.current = true;
+    setLoading(true);
+    setError("");
+    const version = generation.current;
+    const current = new AbortController();
+    controller.current = current;
     try {
-      const params = new URLSearchParams({ cursor: nextCursor });
-      if (query.trim()) params.set("query", query.trim());
-      const response = await fetch(`/api/shopify/products?${params}`);
-      const payload: unknown = await response.json();
-      if (!response.ok || isApiError(payload))
-        throw new Error(
-          isApiError(payload) ? payload.error : "Unable to load products",
-        );
-      const page = payload as ProductPage;
-      setResults((current) => [...current, ...page.products]);
-      setNextCursor(page.nextCursor);
+      const page = await adminFetch<ProductPage>(
+        "/api/shopify/products?" +
+          new URLSearchParams({ cursor, query: query.trim() }),
+        { signal: current.signal },
+      );
+      if (current.signal.aborted || generation.current !== version) return;
+      setResults((items) => [
+        ...new Map(
+          [...items, ...page.products].map((product) => [product.id, product]),
+        ).values(),
+      ]);
+      setCursor(page.nextCursor);
       onProductsLoaded(page.products);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to load products",
-      );
+      if (!current.signal.aborted)
+        setError(
+          reason instanceof Error ? reason.message : "Unable to load products",
+        );
     } finally {
-      setLoading(false);
+      if (!current.signal.aborted && generation.current === version) {
+        pending.current = false;
+        setLoading(false);
+      }
     }
   };
   const toggle = (id: string) =>
-    setDraftSelected((current) =>
-      current.includes(id)
-        ? current.filter((item) => item !== id)
-        : [...current, id],
+    setDraft((items) =>
+      items.includes(id)
+        ? items.filter((item) => item !== id)
+        : items.length < 50
+          ? [...items, id]
+          : items,
     );
-
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) close();
+    <dialog
+      className="product-dialog"
+      ref={dialog}
+      aria-labelledby="product-modal-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
       }}
     >
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="product-modal-title"
-        ref={dialogRef}
-      >
-        <div className="modal-head">
-          <div>
-            <h2 id="product-modal-title">Select products</h2>
-            <p>Choose products or individual variants for this bundle.</p>
-          </div>
-          <button
-            className="icon-button"
-            onClick={close}
-            aria-label="Close product selector"
-          >
-            <X size={21} />
-          </button>
+      <header className="modal-head">
+        <div>
+          <h2 id="product-modal-title">
+            <Text text={"Select products"} />
+          </h2>
+          <p>
+            <Text
+              text={
+                "Choose up to 50 products. Customers choose available variants on your storefront."
+              }
+            />
+          </p>
         </div>
-        <div className="modal-body">
-          <div className="product-pane">
-            <div className="modal-search">
-              <div className="search-box">
-                <Search size={17} />
-                <input
-                  ref={searchRef}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search products"
-                />
-              </div>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Close product selector"
+          onClick={close}
+        >
+          <X size={20} />
+        </button>
+      </header>
+      <div className="modal-search">
+        <label className="search-box">
+          <Search size={16} />
+          <span className="sr-only">
+            <Text text={"Search products"} />
+          </span>
+          <input
+            autoFocus
+            value={query}
+            maxLength={200}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search products"
+          />
+        </label>
+      </div>
+      <div className="product-modal-body">
+        <div className="product-list" aria-busy={loading}>
+          {results.map((product) => (
+            <label
+              className={`product-row ${draft.includes(product.id) ? "selected" : ""}`}
+              key={product.id}
+            >
+              <input
+                type="checkbox"
+                checked={draft.includes(product.id)}
+                onChange={() => toggle(product.id)}
+                disabled={
+                  (!product.available || draft.length >= 50) &&
+                  !draft.includes(product.id)
+                }
+              />
+              <span className="product-image">
+                {product.image ? (
+                  <Image src={product.image} alt="" width={44} height={44} />
+                ) : (
+                  <Package size={21} />
+                )}
+              </span>
+              <span className="product-info">
+                <strong>{product.name}</strong>
+                <small>
+                  {product.variantCount ?? product.variants?.length ?? 0}
+                  {product.variantCount === undefined &&
+                  product.variantsTruncated
+                    ? "+"
+                    : ""}{" "}
+                  <Text text={"variants"} />
+                  {" · "}
+                  {product.available
+                    ? product.stock + " in stock"
+                    : "Unavailable"}
+                </small>
+              </span>
+              <span>{money.format(product.price)}</span>
+            </label>
+          ))}
+          {loading && (
+            <p className="table-loading" role="status">
+              <Text text={"Loading products…"} />
+            </p>
+          )}
+          {error && (
+            <div className="error-banner" role="alert">
+              {error}
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setRetry((value) => value + 1)}
+              >
+                <Text text={"Retry"} />
+              </button>
             </div>
-            <div className="product-list">
-              {results.map((product) => (
-                <label
-                  className={`product-row ${draftSelected.includes(product.id) ? "selected" : ""} ${!product.available ? "unavailable" : ""}`}
-                  key={product.id}
-                >
-                  <input
-                    type="checkbox"
-                    checked={draftSelected.includes(product.id)}
-                    onChange={() => toggle(product.id)}
-                    disabled={
-                      !product.available && !draftSelected.includes(product.id)
-                    }
-                  />
-                  <ProductVisual product={product} />
-                  <div>
-                    <strong>{product.name}</strong>
-                    <small>{product.vendor}</small>
-                    <p>
-                      <span
-                        className={
-                          product.available ? "active-stock" : "no-stock"
-                        }
-                      >
-                        {product.available ? "Available" : "Unavailable"}
-                      </span>{" "}
-                      {product.stock > 0
-                        ? `${product.stock} in stock`
-                        : "Inventory not available"}
-                    </p>
-                  </div>
-                  <b>${product.price.toFixed(2)}</b>
-                </label>
-              ))}
-              {loading && (
-                <div className="table-loading">Loading products…</div>
-              )}
-              {error && <div className="api-error">{error}</div>}
-              {!loading && !error && !results.length && (
-                <div className="table-empty">
-                  <strong>No products found</strong>
-                </div>
-              )}
-              {nextCursor && !loading && (
+          )}
+          {!loading && !error && !results.length && (
+            <div className="empty-state">
+              <h3>
+                <Text text={"No products found"} />
+              </h3>
+              <p>
+                <Text text={"Try another product name."} />
+              </p>
+            </div>
+          )}
+          {cursor && !loading && (
+            <button
+              type="button"
+              className="secondary load-more"
+              onClick={more}
+            >
+              <Text text={"Load more products"} />
+            </button>
+          )}
+        </div>
+        <aside className="selection-pane">
+          <h3>
+            <Text text={"Selected ("} />
+            {draft.length})
+          </h3>
+          {draft.length ? (
+            draft.map((id) => (
+              <div className="selected-product" key={id}>
+                <span>
+                  {catalog.find((product) => product.id === id)?.name ??
+                    "Unavailable product"}
+                </span>
                 <button
                   type="button"
-                  className="secondary product-load-more"
-                  onClick={loadMore}
+                  className="icon-button"
+                  aria-label={`Remove ${catalog.find((product) => product.id === id)?.name ?? "product"}`}
+                  onClick={() => toggle(id)}
                 >
-                  Load more products
+                  <X size={15} />
                 </button>
-              )}
-            </div>
-          </div>
-          <aside className="selection-pane">
-            <div>
-              <h3>Selected</h3>
-              <p>{draftSelected.length} products</p>
-            </div>
-            <div className="selected-list">
-              {!draftSelected.length ? (
-                <div className="empty-mini">
-                  <Package size={25} />
-                  <p>No products selected</p>
-                </div>
-              ) : (
-                catalog
-                  .filter((product) => draftSelected.includes(product.id))
-                  .map((product) => (
-                    <div key={product.id}>
-                      <ProductVisual product={product} />
-                      <div>
-                        <strong>{product.name}</strong>
-                        <small>All variants</small>
-                      </div>
-                      <button
-                        className="icon-button"
-                        onClick={() => toggle(product.id)}
-                        aria-label={`Remove ${product.name}`}
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  ))
-              )}
-            </div>
-          </aside>
-        </div>
-        <div className="modal-footer">
-          <span>
-            {draftSelected.length} product
-            {draftSelected.length !== 1 ? "s" : ""} selected
-          </span>
-          <div>
-            <button className="secondary" onClick={close}>
-              Cancel
-            </button>
-            <button
-              className="primary"
-              onClick={() => {
-                onApply(draftSelected);
-                close();
-              }}
-              disabled={!draftSelected.length}
-            >
-              Add to bundle
-            </button>
-          </div>
-        </div>
+              </div>
+            ))
+          ) : (
+            <p className="muted">
+              <Text text={"No products selected."} />
+            </p>
+          )}
+        </aside>
       </div>
-    </div>
+      <footer className="modal-footer">
+        <span>
+          <Text
+            text="{{count}} of 50 selected"
+            values={{ count: draft.length }}
+          />
+        </span>
+        <div className="button-row">
+          <button type="button" className="secondary" onClick={close}>
+            <Text text={"Cancel"} />
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              onApply(draft);
+              close();
+            }}
+          >
+            <Text text={"Apply selection"} />
+          </button>
+        </div>
+      </footer>
+    </dialog>
   );
 }

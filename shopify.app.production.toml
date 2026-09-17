@@ -6,11 +6,19 @@ embedded = true
 name = "Thanh Sang Bundle"
 
 [webhooks]
-api_version = "2026-10"
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "/api/shopify/webhooks"
+
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+uri = "/api/shopify/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_orders,write_metaobject_definitions,write_metaobjects,write_products"
+scopes = "read_orders,read_products,write_metaobject_definitions,write_metaobjects"
 
 [auth]
 redirect_urls = [ "https://bundleflow-teazys.vercel.app/api/auth/callback" ]

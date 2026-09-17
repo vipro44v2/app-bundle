@@ -11,4 +11,5 @@ export type DashboardData = {
   products: number;
   inventory: number;
   dailyRevenue: DailyRevenue[];
+  partial?: boolean;
 };

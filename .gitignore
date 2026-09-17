@@ -1,2 +1,15 @@
-.vercel
-node_modules
+node_modules/
+.next/
+.vercel/
+.shopify/
+.env
+.env.local
+.env.*.local
+*.log
+coverage/
+.DS_Store
+*.tsbuildinfo
+.audit-baseline/
+test-results/
+playwright-report/
+artifacts/

@@ -1,6 +1,6 @@
 {{ 'bundleflow-widget.css' | asset_url | stylesheet_tag }}
 <script src="{{ 'bundleflow-widget.js' | asset_url }}" defer></script>
-<section class="bundleflow-widget" data-bundleflow data-api-url="https://bundleflow-teazys.vercel.app/api/storefront/bundles" data-current-product-id="{{ product.id }}" data-current-product-handle="{{ product.handle | escape }}" data-button-label="{{ block.settings.button_label | escape }}" data-default-offer="{{ block.settings.default_offer }}" data-show-button="{{ block.settings.show_button }}" style="--bf-accent:{{ block.settings.accent }};--bf-text:{{ block.settings.text_color }};--bf-card:{{ block.settings.card_background }};--bf-selected:{{ block.settings.selected_background }};--bf-badge:{{ block.settings.badge_background }};--bf-gift:{{ block.settings.gift_background }};--bf-border:{{ block.settings.border_color }};--bf-button:{{ block.settings.button_color }};--bf-radius:{{ block.settings.corner_radius }}px;--bf-border-width:{{ block.settings.border_width }}px;--bf-heading-size:{{ block.settings.heading_size }}px;--bf-card-padding:{{ block.settings.card_padding }}px;" {{ block.shopify_attributes }}>
+<section id="bundleflow-{{ block.id }}" class="bundleflow-widget" data-bundleflow data-api-url="{{ block.settings.app_url | default: 'https://bundleflow-teazys.vercel.app' | escape }}/api/storefront/bundles" data-shop="{{ shop.permanent_domain | escape }}" data-current-product-id="{{ product.id }}" data-current-product-handle="{{ product.handle | escape }}" data-button-label="{{ block.settings.button_label | escape }}" data-default-offer="{{ block.settings.default_offer }}" data-show-button="{{ block.settings.show_button }}" style="--bf-accent:{{ block.settings.accent }};--bf-text:{{ block.settings.text_color }};--bf-card:{{ block.settings.card_background }};--bf-selected:{{ block.settings.selected_background }};--bf-badge:{{ block.settings.badge_background }};--bf-gift:{{ block.settings.gift_background }};--bf-border:{{ block.settings.border_color }};--bf-button:{{ block.settings.button_color }};--bf-radius:{{ block.settings.corner_radius }}px;--bf-border-width:{{ block.settings.border_width }}px;--bf-heading-size:{{ block.settings.heading_size }}px;--bf-card-padding:{{ block.settings.card_padding }}px;" {{ block.shopify_attributes }}>
   <div class="bundleflow-widget__header"><h2>{{ block.settings.heading | escape }}</h2></div>
   <div class="bundleflow-widget__loading" role="status">Loading bundles…</div>
   <div class="bundleflow-widget__list" data-bundle-list></div>
@@ -8,6 +8,7 @@
 </section>
 {% schema %}
 {"name":"Thanh Sang Bundle","target":"section","settings":[
+{"type":"url","id":"app_url","label":"App URL","info":"Public URL of your installed bundle app, without a trailing slash."},
 {"type":"text","id":"heading","label":"Heading","default":"BUNDLE & SAVE"},
 {"type":"text","id":"button_label","label":"Button label","default":"ADD SELECTED BUNDLE"},
 {"type":"header","content":"Layout"},

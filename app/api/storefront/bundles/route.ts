@@ -1,106 +1,98 @@
-import { NextResponse } from "next/server";
-import { BUNDLE_TYPE, parseBundle } from "@/lib/bundles";
+import { NextRequest, NextResponse } from "next/server";
+import { configuredShop } from "@/lib/auth";
+import { apiError } from "@/lib/api-response";
+import { getBundles } from "@/lib/shopify/bundles";
 import { shopifyAdmin } from "@/lib/shopify";
-
+import { isScheduledActive, parseBundleInput } from "@/lib/bundle/validation";
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
-
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: cors });
 }
-
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const bundleResponse = (await shopifyAdmin(
-      `query StorefrontBundles($type: String!) { shop { currencyCode } metaobjects(type: $type, first: 50) { nodes { id handle updatedAt fields { key value } } } }`,
-      { type: BUNDLE_TYPE },
-    )) as {
-      data?: {
-        shop: { currencyCode: string };
-        metaobjects: { nodes: Parameters<typeof parseBundle>[0][] };
-      };
-    };
-    if (!bundleResponse.data) throw new Error("Unable to load bundles");
-    const bundles = bundleResponse.data.metaobjects.nodes
-      .map(parseBundle)
-      .filter((bundle) => bundle.status === "Active");
+    const shop = configuredShop();
+    const requestedShop = request.nextUrl.searchParams.get("shop");
+    if (requestedShop !== shop)
+      return NextResponse.json(
+        { error: "Unknown storefront" },
+        { status: 403, headers: cors },
+      );
+    const productId = request.nextUrl.searchParams.get("product");
+    if (!productId || !/^\d+$/.test(productId))
+      return NextResponse.json(
+        { error: "A product ID is required" },
+        { status: 400, headers: cors },
+      );
+    const bundles = (await getBundles())
+      .filter(
+        (bundle) =>
+          bundle.status === "Active" &&
+          bundle.productIds.includes("gid://shopify/Product/" + productId) &&
+          isScheduledActive(bundle.configuration?.settings),
+      )
+      .filter((bundle) => {
+        try {
+          parseBundleInput({ ...bundle, bundleType: bundle.type });
+          return true;
+        } catch {
+          console.warn("Invalid storefront bundle skipped", { id: bundle.id });
+          return false;
+        }
+      });
     const ids = [...new Set(bundles.flatMap((bundle) => bundle.productIds))];
-    const productResponse = ids.length
-      ? ((await shopifyAdmin(
-          `query BundleProducts($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { id title handle featuredImage { url altText } options { name values } variants(first: 50) { nodes { id title price availableForSale selectedOptions { name value } } } } } }`,
-          { ids },
-        )) as {
-          data?: {
-            nodes: Array<null | {
-              id: string;
-              title: string;
-              handle: string;
-              featuredImage?: { url: string; altText?: string } | null;
-              options: Array<{ name: string; values: string[] }>;
-              variants: {
-                nodes: Array<{
-                  id: string;
-                  title: string;
-                  price: string;
-                  availableForSale: boolean;
-                  selectedOptions: Array<{ name: string; value: string }>;
-                }>;
-              };
-            }>;
-          };
-        })
-      : { data: { nodes: [] } };
-    const products = new Map(
-      (productResponse.data?.nodes ?? [])
-        .filter(Boolean)
-        .map((product) => [product!.id, product!]),
-    );
+    type Product = {
+      id: string;
+      title: string;
+      handle: string;
+      status: string;
+      onlineStoreUrl: string | null;
+    };
+    const products = new Map<string, Product>();
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const response = await shopifyAdmin<{ nodes: (Product | null)[] }>(
+        "query WidgetProducts($ids:[ID!]!) { nodes(ids:$ids) { ... on Product { id title handle status onlineStoreUrl } } }",
+        { ids: ids.slice(offset, offset + 100) },
+      );
+      for (const product of response.data!.nodes)
+        if (
+          product?.id &&
+          product.status === "ACTIVE" &&
+          product.onlineStoreUrl
+        )
+          products.set(product.id, product);
+    }
     return NextResponse.json(
       {
-        currency: bundleResponse.data.shop.currencyCode,
-        bundles: bundles.map((bundle) => ({
-          ...bundle,
-          products: bundle.productIds
-            .map((id) => products.get(id))
-            .filter(Boolean)
-            .map((product) => {
-              const selectedVariant =
-                product!.variants.nodes.find(
-                  (variant) => variant.availableForSale,
-                ) ?? product!.variants.nodes[0];
-              return {
-                id: product!.id,
-                title: product!.title,
-                handle: product!.handle,
-                image: product!.featuredImage?.url ?? null,
-                options: product!.options,
-                variants: product!.variants.nodes.map((variant) => ({
-                  id: variant.id.split("/").pop(),
-                  title: variant.title,
-                  price: Number(variant.price),
-                  available: variant.availableForSale,
-                  selectedOptions: variant.selectedOptions,
-                })),
-                variantId: selectedVariant?.id.split("/").pop(),
-                price: Number(selectedVariant?.price ?? 0),
-                available: selectedVariant?.availableForSale ?? false,
-              };
-            }),
-        })),
+        bundles: bundles
+          .filter((bundle) => bundle.productIds.every((id) => products.has(id)))
+          .map((bundle) => ({
+            id: bundle.id,
+            name: bundle.name,
+            type: bundle.type,
+            discount: bundle.discount,
+            configuration: bundle.configuration,
+            products: bundle.productIds.map((id) => ({
+              id,
+              handle: products.get(id)!.handle,
+              title: products.get(id)!.title,
+            })),
+          })),
       },
       {
         headers: {
           ...cors,
-          "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+          "Cache-Control": "public, s-maxage=15, stale-while-revalidate=15",
         },
       },
     );
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
-      { status: 500, headers: cors },
+    const response = apiError(error, "Bundles are temporarily unavailable");
+    Object.entries(cors).forEach(([key, value]) =>
+      response.headers.set(key, value),
     );
+    return response;
   }
 }

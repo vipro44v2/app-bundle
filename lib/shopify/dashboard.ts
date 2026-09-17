@@ -1,65 +1,106 @@
-import { BUNDLE_TYPE } from "@/lib/bundles";
 import { shopifyAdmin } from "@/lib/shopify";
+import { getBundles } from "@/lib/shopify/bundles";
+import { toMinor, fromMinor } from "@/lib/bundle/pricing";
+import { isScheduledActive } from "@/lib/bundle/validation";
 import type { DashboardData } from "@/types/dashboard";
-
 export async function getDashboardData(): Promise<DashboardData> {
-  const now = Date.now();
-  const since = new Date(now - 30 * 86400000).toISOString();
-  const response = await shopifyAdmin<{
-    shop: { name: string; currencyCode: string };
-    products: { nodes: Array<{ totalInventory: number }> };
-    orders: {
-      nodes: Array<{
-        createdAt: string;
-        currentTotalPriceSet: { shopMoney: { amount: string } };
-      }>;
-    };
-    metaobjects: {
-      nodes: Array<{ fields: Array<{ key: string; value: string }> }>;
-    };
-  }>(
-    `query Dashboard($bundleType: String!, $orderQuery: String!) { shop { name currencyCode } products(first: 100) { nodes { totalInventory } } orders(first: 250, query: $orderQuery, sortKey: CREATED_AT) { nodes { createdAt currentTotalPriceSet { shopMoney { amount currencyCode } } } } metaobjects(type: $bundleType, first: 100) { nodes { fields { key value } } } }`,
-    { bundleType: BUNDLE_TYPE, orderQuery: `created_at:>=${since}` },
-  );
-  if (!response.data)
-    throw new Error(
-      response.errors?.map((error) => error.message).join(", ") ||
-        "Unable to load dashboard",
-    );
-  const { shop, products, orders, metaobjects } = response.data;
-  const revenue = orders.nodes.reduce(
-    (sum, order) => sum + Number(order.currentTotalPriceSet.shopMoney.amount),
-    0,
-  );
+  const now = new Date();
+  const since = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 29),
+  ).toISOString();
+  const [identity, bundles] = await Promise.all([
+    shopifyAdmin<{ shop: { name: string; currencyCode: string } }>(
+      "query DashboardShop { shop { name currencyCode } }",
+    ),
+    getBundles(),
+  ]);
+  const shop = identity.data!.shop;
   const daily = new Map<string, number>();
-  for (let index = 29; index >= 0; index--)
-    daily.set(new Date(now - index * 86400000).toISOString().slice(0, 10), 0);
-  for (const order of orders.nodes) {
-    const date = order.createdAt.slice(0, 10);
-    if (daily.has(date))
-      daily.set(
-        date,
-        (daily.get(date) ?? 0) +
-          Number(order.currentTotalPriceSet.shopMoney.amount),
+  for (let i = 0; i < 30; i++)
+    daily.set(
+      new Date(Date.parse(since) + i * 86400000).toISOString().slice(0, 10),
+      0,
+    );
+  let orderCursor: string | null = null,
+    productCursor: string | null = null;
+  let orders = 0,
+    revenueMinor = 0,
+    products = 0,
+    inventory = 0,
+    partial = false;
+  for (let page = 0; page < 20; page++) {
+    const response: {
+      data?: {
+        orders: {
+          nodes: {
+            createdAt: string;
+            currentTotalPriceSet: { shopMoney: { amount: string } };
+          }[];
+          pageInfo: { endCursor: string | null; hasNextPage: boolean };
+        };
+      };
+    } = await shopifyAdmin(
+      "query DashboardOrders($after: String, $query: String!) { orders(first: 250, after: $after, query: $query, sortKey: CREATED_AT) { nodes { createdAt currentTotalPriceSet { shopMoney { amount } } } pageInfo { hasNextPage endCursor } } }",
+      { after: orderCursor, query: "created_at:>=" + since + " status:any" },
+    );
+    const connection = response.data!.orders;
+    for (const order of connection.nodes) {
+      const amount = toMinor(
+        Number(order.currentTotalPriceSet.shopMoney.amount),
+        shop.currencyCode,
       );
+      revenueMinor += amount;
+      orders++;
+      const date = order.createdAt.slice(0, 10);
+      if (daily.has(date)) daily.set(date, daily.get(date)! + amount);
+    }
+    if (!connection.pageInfo.hasNextPage) break;
+    partial = page === 19;
+    orderCursor = connection.pageInfo.endCursor;
+  }
+  for (let page = 0; page < 20; page++) {
+    const response: {
+      data?: {
+        products: {
+          nodes: { totalInventory: number }[];
+          pageInfo: { endCursor: string | null; hasNextPage: boolean };
+        };
+      };
+    } = await shopifyAdmin(
+      "query DashboardInventory($after: String) { products(first: 250, after: $after) { nodes { totalInventory } pageInfo { hasNextPage endCursor } } }",
+      { after: productCursor },
+    );
+    const connection = response.data!.products;
+    products += connection.nodes.length;
+    inventory += connection.nodes.reduce(
+      (sum, product) => sum + Math.max(0, product.totalInventory ?? 0),
+      0,
+    );
+    if (!connection.pageInfo.hasNextPage) break;
+    partial ||= page === 19;
+    productCursor = connection.pageInfo.endCursor;
   }
   return {
     shop: shop.name,
     currency: shop.currencyCode,
-    revenue,
-    orders: orders.nodes.length,
-    averageOrderValue: orders.nodes.length ? revenue / orders.nodes.length : 0,
-    bundles: metaobjects.nodes.length,
-    activeBundles: metaobjects.nodes.filter((node) =>
-      node.fields.some(
-        (field) => field.key === "status" && field.value === "Active",
-      ),
-    ).length,
-    products: products.nodes.length,
-    inventory: products.nodes.reduce(
-      (sum, product) => sum + Math.max(0, product.totalInventory || 0),
-      0,
+    revenue: fromMinor(revenueMinor, shop.currencyCode),
+    orders,
+    averageOrderValue: fromMinor(
+      orders ? Math.round(revenueMinor / orders) : 0,
+      shop.currencyCode,
     ),
-    dailyRevenue: [...daily].map(([date, value]) => ({ date, value })),
+    bundles: bundles.length,
+    activeBundles: bundles.filter(
+      (bundle) =>
+        bundle.status === "Active" &&
+        isScheduledActive(bundle.configuration?.settings),
+    ).length,
+    products,
+    inventory,
+    dailyRevenue: [...daily].map(([date, value]) => ({
+      date,
+      value: fromMinor(value, shop.currencyCode),
+    })),
+    partial,
   };
 }

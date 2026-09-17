@@ -1,27 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const SHOP_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/;
-
-export async function GET(request: NextRequest) {
-  const shop = request.nextUrl.searchParams.get("shop")?.toLowerCase() ?? "";
-  if (!SHOP_PATTERN.test(shop)) {
-    return NextResponse.json(
-      { error: "Invalid Shopify shop domain" },
-      { status: 400 },
+import { configuredShop } from "@/lib/auth";
+import { AppError } from "@/lib/errors";
+import { apiError } from "@/lib/api-response";
+export function GET(request: NextRequest) {
+  try {
+    const shop = configuredShop();
+    const requested = request.nextUrl.searchParams.get("shop");
+    if (requested && requested.toLowerCase() !== shop)
+      throw new AppError(
+        "This app is configured for a different store",
+        403,
+        "SHOP_MISMATCH",
+      );
+    const clientId = process.env.SHOPIFY_API_KEY;
+    if (!clientId)
+      throw new AppError(
+        "Shopify connection is not configured",
+        503,
+        "NOT_CONFIGURED",
+      );
+    return NextResponse.redirect(
+      "https://admin.shopify.com/store/" +
+        shop.replace(".myshopify.com", "") +
+        "/apps/" +
+        encodeURIComponent(clientId),
     );
+  } catch (error) {
+    return apiError(error);
   }
-
-  const clientId = process.env.SHOPIFY_API_KEY;
-  if (!clientId)
-    return NextResponse.json(
-      { error: "Shopify API key is missing" },
-      { status: 500 },
-    );
-
-  const handle = shop.replace(".myshopify.com", "");
-  const installUrl = new URL(
-    `https://admin.shopify.com/store/${handle}/oauth/install`,
-  );
-  installUrl.searchParams.set("client_id", clientId);
-  return NextResponse.redirect(installUrl);
 }

@@ -17,9 +17,12 @@ export type CatalogProduct = {
   image?: string | null;
   available: boolean;
   variants?: CatalogVariant[];
+  variantCount?: number;
+  variantsTruncated?: boolean;
 };
 
 export type ProductPage = {
   products: CatalogProduct[];
   nextCursor: string | null;
+  currency: string;
 };

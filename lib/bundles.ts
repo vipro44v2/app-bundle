@@ -1,6 +1,7 @@
 import { shopifyAdmin } from "@/lib/shopify";
+import { AppError } from "@/lib/errors";
+import { parseBundleInput } from "@/lib/bundle/validation";
 import {
-  BUNDLE_TYPES,
   type BundleConfiguration,
   type BundleInput,
   type BundleRecord,
@@ -18,10 +19,22 @@ type ShopifyUserError = { field?: string[]; message: string; code?: string };
 
 export function assertNoUserErrors(errors: ShopifyUserError[] | undefined) {
   if (errors?.length)
-    throw new Error(errors.map((error) => error.message).join(", "));
+    throw new AppError(
+      errors.map((error) => error.message).join(", "),
+      422,
+      "SHOPIFY_USER_ERROR",
+    );
 }
 
-export async function ensureBundleDefinition() {
+let definitionInFlight: Promise<void> | null = null;
+export function ensureBundleDefinition() {
+  if (!definitionInFlight)
+    definitionInFlight = ensureDefinition().finally(() => {
+      definitionInFlight = null;
+    });
+  return definitionInFlight;
+}
+async function ensureDefinition() {
   const existing = (await shopifyAdmin(
     `query BundleDefinition($type: String!) { metaobjectDefinitionByType(type: $type) { id fieldDefinitions { key } } }`,
     { type: BUNDLE_TYPE },
@@ -64,6 +77,8 @@ export async function ensureBundleDefinition() {
         };
       };
       assertNoUserErrors(updated.data?.metaobjectDefinitionUpdate?.userErrors);
+      if (!updated.data?.metaobjectDefinitionUpdate)
+        throw new AppError("Unable to update bundle definition", 502);
     }
     return;
   }
@@ -130,6 +145,8 @@ export async function ensureBundleDefinition() {
     data?: { metaobjectDefinitionCreate?: { userErrors?: ShopifyUserError[] } };
   };
   assertNoUserErrors(created.data?.metaobjectDefinitionCreate?.userErrors);
+  if (!created.data?.metaobjectDefinitionCreate)
+    throw new AppError("Unable to create bundle definition", 502);
 }
 
 export function bundleFields(input: BundleInput, includeCreatedAt = false) {
@@ -140,11 +157,10 @@ export function bundleFields(input: BundleInput, includeCreatedAt = false) {
     { key: "discount", value: String(input.discount) },
     { key: "status", value: input.status },
   ];
-  if (input.configuration)
-    fields.push({
-      key: "configuration",
-      value: JSON.stringify(input.configuration),
-    });
+  fields.push({
+    key: "configuration",
+    value: JSON.stringify(input.configuration ?? { bars: [] }),
+  });
   if (includeCreatedAt)
     fields.push({ key: "created_at", value: new Date().toISOString() });
   return fields;
@@ -164,27 +180,53 @@ export function parseBundle(node: {
   try {
     productIds = JSON.parse(values.product_ids || "[]");
   } catch {
-    productIds = [];
+    console.warn("Corrupt bundle products", { id: node.id });
+    throw new AppError(
+      "A saved bundle has invalid products. Repair it in Shopify.",
+      422,
+      "CORRUPT_BUNDLE",
+    );
   }
   try {
     configuration = values.configuration
       ? (JSON.parse(values.configuration) as BundleConfiguration)
       : undefined;
   } catch {
-    configuration = undefined;
+    console.warn("Corrupt bundle configuration", { id: node.id });
+    throw new AppError(
+      "A saved bundle has invalid configuration. Repair it in Shopify.",
+      422,
+      "CORRUPT_BUNDLE",
+    );
+  }
+  let validated: BundleInput;
+  try {
+    validated = parseBundleInput({
+      name: values.name,
+      bundleType: values.bundle_type,
+      productIds,
+      discount: values.discount?.trim() ? Number(values.discount) : NaN,
+      status: values.status,
+      configuration,
+    });
+  } catch {
+    console.warn("Corrupt saved bundle", { id: node.id });
+    throw new AppError(
+      "A saved bundle contains invalid data. Repair it in Shopify.",
+      422,
+      "CORRUPT_BUNDLE",
+    );
   }
   return {
     id: node.id,
     handle: node.handle,
-    name: values.name || "Untitled bundle",
-    type: BUNDLE_TYPES.includes(values.bundle_type as BundleRecord["type"])
-      ? (values.bundle_type as BundleRecord["type"])
-      : "Fixed bundle",
-    productIds,
-    products: productIds.length,
-    discount: Number(values.discount || 0),
-    status: values.status === "Active" ? "Active" : "Draft",
-    configuration,
+    name: validated.name,
+    type: validated.bundleType,
+    productIds: validated.productIds,
+    products: validated.productIds.length,
+    discount: validated.discount,
+    status: validated.status,
+    configuration: validated.configuration,
     updatedAt: node.updatedAt,
   };
 }

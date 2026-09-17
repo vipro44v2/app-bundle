@@ -1,226 +1,353 @@
 "use client";
-
+import Text from "@/components/localization/text";
 import Link from "next/link";
-import { Clock3, Gift, Package, Plus, Search, Trash2 } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
-import type { BundleRecord, BundleStatus } from "@/types/bundle";
-import { isApiError } from "@/types/api";
-
-const primary =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-green-700 bg-green-600 px-3.5 text-[13px] font-semibold text-white shadow-sm hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50";
-const secondary =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[#cbd4ce] bg-white px-3.5 text-[13px] font-semibold text-[#26332c] hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50";
-
+import { Plus, Search, RefreshCw, Package, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { BundleRecord } from "@/types/bundle";
+import {
+  publicationStatus,
+  type PublicationStatus,
+} from "@/lib/bundle/publication";
+import { adminFetch } from "@/lib/admin-fetch";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
+const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
 export default function BundleList({
   initialBundles,
+  reload,
+  refreshing = false,
 }: {
   initialBundles: BundleRecord[];
+  reload: () => void;
+  refreshing?: boolean;
 }) {
-  const router = useRouter();
   const [bundles, setBundles] = useState(initialBundles);
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<"All" | BundleStatus>("All");
+  const [tab, setTab] = useState<"All" | PublicationStatus>("All");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const [sort, setSort] = useState("updated");
+  const [page, setPage] = useState(1);
   const [error, setError] = useState("");
-  const [deleting, setDeleting] = useState<Set<string>>(() => new Set());
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return bundles.filter(
-      (bundle) =>
-        (tab === "All" || bundle.status === tab) &&
-        (!normalized || bundle.name.toLowerCase().includes(normalized)),
-    );
-  }, [bundles, query, tab]);
-  const remove = async (bundle: BundleRecord) => {
-    if (
-      !window.confirm(`Delete “${bundle.name}”? This cannot be undone.`) ||
-      deleting.has(bundle.id)
-    )
-      return;
-    setDeleting((current) => new Set(current).add(bundle.id));
+  const [notice, setNotice] = useState("");
+  const [target, setTarget] = useState<BundleRecord | null>(null);
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  useEffect(() => {
+    setBundles(initialBundles);
+  }, [initialBundles]);
+  const filtered = useMemo(
+    () =>
+      bundles
+        .filter(
+          (bundle) =>
+            (tab === "All" || publicationStatus(bundle, now) === tab) &&
+            bundle.name.toLowerCase().includes(query.trim().toLowerCase()),
+        )
+        .sort((a, b) =>
+          sort === "name"
+            ? a.name.localeCompare(b.name)
+            : Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+        ),
+    [bundles, query, tab, sort, now],
+  );
+  const pages = Math.max(1, Math.ceil(filtered.length / 20));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * 20, currentPage * 20);
+  const remove = async () => {
+    if (!target || lock.current) return;
+    lock.current = true;
+    setBusy(true);
     setError("");
     try {
-      const response = await fetch(
-        `/api/bundles/${encodeURIComponent(bundle.id)}`,
+      const result = await adminFetch<{ deleted: string }>(
+        `/api/bundles/${encodeURIComponent(target.id)}`,
         { method: "DELETE" },
       );
-      const payload: unknown = await response.json();
-      if (!response.ok || isApiError(payload))
-        throw new Error(
-          isApiError(payload) ? payload.error : "Unable to delete bundle",
-        );
-      setBundles((current) => current.filter((item) => item.id !== bundle.id));
-      router.refresh();
+      if (result.deleted !== target.id)
+        throw new Error("The bundle could not be deleted. Please retry.");
+      setBundles((items) => items.filter((bundle) => bundle.id !== target.id));
+      setNotice(`“${target.name}” deleted`);
+      setTarget(null);
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "Unable to delete bundle",
       );
     } finally {
-      setDeleting((current) => {
-        const next = new Set(current);
-        next.delete(bundle.id);
-        return next;
-      });
+      lock.current = false;
+      setBusy(false);
     }
   };
   return (
-    <div className="mx-auto w-full max-w-[1220px] px-4 pb-[70px] pt-6 sm:px-[34px] sm:pt-8">
-      <div className="mb-[26px] flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+    <div className="page-content">
+      <header className="page-heading">
         <div>
-          <p className="mb-1.5 text-[10px] font-bold tracking-[1.5px] text-green-700">
-            SHOPIFY CATALOG
-          </p>
-          <h1 className="m-0 text-[28px] font-bold leading-tight tracking-[-.7px]">
-            Bundles
+          <h1>
+            <Text text={"Bundles"} />
           </h1>
-          <p className="mt-1.5 text-[#6d7175]">
-            Create and manage offers stored directly in your Shopify admin.
+          <p>
+            <Text
+              text={"Manage your offers, products and publishing status."}
+            />
           </p>
         </div>
-        <Link className={primary} href="/bundles/new">
-          <Plus className="block" size={18} />
-          Create bundle
+        <Link className="primary" href="/bundles/new">
+          <Plus size={16} />
+          <Text text={"Create bundle"} />
         </Link>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-[#e3e3e3] bg-white shadow-sm">
-        <div className="flex gap-1 border-b border-[#e1e3e5] px-4 pt-2">
-          {(["All", "Active", "Draft"] as const).map((item) => (
-            <button
-              key={item}
-              className={`flex min-h-10 items-center gap-1.5 border-b-2 px-3 text-[13px] font-semibold ${tab === item ? "border-green-600 text-green-700" : "border-transparent text-[#6d7175] hover:text-[#202223]"}`}
-              onClick={() => setTab(item)}
-            >
-              {item}
-              <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px]">
-                {item === "All"
-                  ? bundles.length
-                  : bundles.filter((bundle) => bundle.status === item).length}
-              </span>
-            </button>
-          ))}
-        </div>
-        <div className="flex flex-col gap-2 border-b border-[#e1e3e5] p-3 sm:flex-row">
-          <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-lg border border-[#cbd4ce] px-3 text-[#6d7175]">
-            <Search className="block shrink-0" size={17} />
-            <input
-              className="min-w-0 flex-1 border-0 bg-transparent outline-none"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search bundles"
-            />
-          </div>
-          <button className={secondary} onClick={() => router.refresh()}>
-            <Clock3 className="block" size={17} />
-            Refresh
+      </header>
+      {notice && (
+        <div className="notice" role="status">
+          {notice}
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setNotice("")}
+          >
+            <Text text={"Dismiss"} />
           </button>
         </div>
-        {error && (
-          <div className="m-3 flex items-center justify-between rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            {error}
-            <button
-              className="font-semibold underline"
-              onClick={() => setError("")}
+      )}
+      <section
+        className="surface bundle-surface"
+        aria-label="Bundle list"
+        aria-busy={refreshing}
+      >
+        <div className="list-tabs" role="group" aria-label="Filter by status">
+          {(["All", "Active", "Draft", "Scheduled", "Ended"] as const).map(
+            (item) => (
+              <button
+                type="button"
+                aria-pressed={tab === item}
+                key={item}
+                onClick={() => {
+                  setTab(item);
+                  setPage(1);
+                }}
+              >
+                <Text text={item} />
+                <span>
+                  {item === "All"
+                    ? bundles.length
+                    : bundles.filter(
+                        (bundle) => publicationStatus(bundle, now) === item,
+                      ).length}
+                </span>
+              </button>
+            ),
+          )}
+        </div>
+        <div className="list-toolbar">
+          <label className="search-box">
+            <Search size={16} />
+            <span className="sr-only">
+              <Text text={"Search bundles"} />
+            </span>
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
+              placeholder="Search bundles"
+            />
+          </label>
+          <label className="sort-label">
+            <span className="sr-only">
+              <Text text={"Sort bundles"} />
+            </span>
+            <select
+              value={sort}
+              onChange={(event) => setSort(event.target.value)}
             >
-              Dismiss
+              <option value="updated">
+                <Text text={"Recently updated"} />
+              </option>
+              <option value="name">
+                <Text text={"Name A–Z"} />
+              </option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            onClick={reload}
+            disabled={refreshing}
+            aria-label="Refresh bundles"
+          >
+            <RefreshCw size={15} />
+            <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
+          </button>
+        </div>
+        {error && !target && (
+          <div className="error-banner" role="alert">
+            {error}
+          </div>
+        )}
+        {visible.length ? (
+          <table className="bundle-table">
+            <caption className="sr-only">
+              <Text text={"Bundles with products, discounts and status"} />
+            </caption>
+            <thead>
+              <tr>
+                {[
+                  "Bundle",
+                  "Products",
+                  "Discount",
+                  "Status",
+                  "Updated",
+                  "Actions",
+                ].map((label) => (
+                  <th scope="col" key={label}>
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((bundle) => (
+                <tr key={bundle.id}>
+                  <td className="bundle-name">
+                    <Link
+                      href={`/bundles/${encodeURIComponent(bundle.id)}/edit`}
+                    >
+                      {bundle.name}
+                    </Link>
+                    <span>{bundle.type}</span>
+                  </td>
+                  <td data-label="Products">{bundle.products}</td>
+                  <td data-label="Discount">
+                    {bundle.type === "Volume discount"
+                      ? "Tiered"
+                      : bundle.type === "Buy X get Y"
+                        ? "Buy X get Y"
+                        : bundle.discount + "%"}
+                  </td>
+                  <td data-label="Status">
+                    <span
+                      className={`status ${publicationStatus(bundle, now).toLowerCase()}`}
+                    >
+                      <Text text={publicationStatus(bundle, now)} />
+                    </span>
+                  </td>
+                  <td data-label="Updated">
+                    {Number.isFinite(Date.parse(bundle.updatedAt))
+                      ? dateFormat.format(new Date(bundle.updatedAt))
+                      : "Unknown"}
+                  </td>
+                  <td className="row-actions">
+                    <Link
+                      className="secondary"
+                      href={`/bundles/${encodeURIComponent(bundle.id)}/edit`}
+                    >
+                      <Text text={"Edit"} />
+                      <span className="sr-only"> {bundle.name}</span>
+                    </Link>
+                    <button
+                      type="button"
+                      className="icon-button danger"
+                      aria-label={`Delete ${bundle.name}`}
+                      onClick={() => {
+                        setError("");
+                        setTarget(bundle);
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty-state">
+            <Package size={28} />
+            <h2>
+              {bundles.length
+                ? "No matching bundles"
+                : "Create your first bundle"}
+            </h2>
+            <p>
+              {bundles.length
+                ? "Try a different name or clear your filters."
+                : "Group products and set up an offer for your customers."}
+            </p>
+            {bundles.length ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setQuery("");
+                  setTab("All");
+                }}
+              >
+                <Text text={"Clear filters"} />
+              </button>
+            ) : (
+              <Link className="primary" href="/bundles/new">
+                <Text text={"Create bundle"} />
+              </Link>
+            )}
+          </div>
+        )}
+        <footer className="list-footer">
+          <span>
+            <Text
+              text="Showing {{from}}–{{to}} of {{count}} bundles"
+              values={{
+                from: filtered.length ? (currentPage - 1) * 20 + 1 : 0,
+                to: Math.min(currentPage * 20, filtered.length),
+                count: filtered.length,
+              }}
+            />
+          </span>
+          <div className="button-row">
+            <button
+              type="button"
+              className="secondary"
+              disabled={currentPage === 1}
+              onClick={() => setPage(currentPage - 1)}
+            >
+              <Text text={"Previous"} />
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={currentPage === pages}
+              onClick={() => setPage(currentPage + 1)}
+            >
+              <Text text={"Next"} />
             </button>
           </div>
-        )}
-        {filtered.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse text-left text-[13px]">
-              <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-[#6d7175]">
-                <tr>
-                  {[
-                    "Bundle",
-                    "Type",
-                    "Products",
-                    "Discount",
-                    "Updated",
-                    "Status",
-                    "",
-                  ].map((heading) => (
-                    <th
-                      className="border-b border-[#e1e3e5] px-4 py-3 font-semibold"
-                      key={heading}
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((bundle) => (
-                  <tr
-                    className="border-b border-[#edf0ee] last:border-0 hover:bg-gray-50"
-                    key={bundle.id}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <span className="grid size-[34px] shrink-0 place-items-center rounded-lg bg-green-50 text-green-600">
-                          <Gift className="block" size={19} />
-                        </span>
-                        <strong className="truncate">{bundle.name}</strong>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">{bundle.type}</td>
-                    <td className="px-4 py-3">{bundle.products}</td>
-                    <td className="px-4 py-3 font-semibold">
-                      {bundle.discount}%
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      {new Intl.DateTimeFormat("en", {
-                        dateStyle: "medium",
-                      }).format(new Date(bundle.updatedAt))}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${bundle.status === "Active" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}`}
-                      >
-                        {bundle.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1.5">
-                        <Link
-                          className={secondary}
-                          href={`/bundles/${encodeURIComponent(bundle.id)}/edit`}
-                        >
-                          Edit
-                        </Link>
-                        <button
-                          className="grid size-10 place-items-center rounded-lg text-red-600 hover:bg-red-50 disabled:opacity-50"
-                          disabled={deleting.has(bundle.id)}
-                          aria-label={`Delete ${bundle.name}`}
-                          onClick={() => remove(bundle)}
-                        >
-                          <Trash2 className="block" size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="grid min-h-72 place-items-center p-8 text-center">
-            <div>
-              <Package className="mx-auto mb-3 text-[#6d7175]" size={28} />
-              <strong className="block text-base">No bundles found</strong>
-              <span className="mb-4 mt-1 block text-sm text-[#6d7175]">
-                Create a bundle to save it directly in Shopify.
-              </span>
-              <Link className={primary} href="/bundles/new">
-                <Plus className="block" size={17} />
-                Create bundle
-              </Link>
-            </div>
-          </div>
-        )}
-        <div className="border-t border-[#e1e3e5] px-4 py-3 text-xs text-[#6d7175]">
-          Showing {filtered.length} of {bundles.length} bundles
-        </div>
-      </div>
+        </footer>
+      </section>
+      {target && (
+        <ConfirmDialog
+          title={`Delete “${target.name}”?`}
+          busy={busy}
+          onCancel={() => {
+            setTarget(null);
+            setError("");
+          }}
+          onConfirm={remove}
+        >
+          <p>
+            <Text
+              text={
+                "This removes the bundle offer. Your Shopify products will be kept. This action cannot be undone."
+              }
+            />
+          </p>
+          {error && (
+            <p className="field-error" role="alert">
+              {error}
+            </p>
+          )}
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

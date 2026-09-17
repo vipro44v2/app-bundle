@@ -1,7 +1,4 @@
+import { LoadingState } from "@/components/ui/data-state";
 export default function Loading() {
-  return (
-    <main className="content">
-      <div className="loading-state">Loading dashboard…</div>
-    </main>
-  );
+  return <LoadingState label="Loading overview" />;
 }

@@ -5,3 +5,8 @@ node_modules
 tsconfig.tsbuildinfo
 package-lock.json
 ui-home.png
+
+.audit-baseline
+artifacts
+test-results
+playwright-report
