@@ -1,0 +1,7 @@
+.next
+.shopify
+.vercel
+node_modules
+tsconfig.tsbuildinfo
+package-lock.json
+ui-home.png

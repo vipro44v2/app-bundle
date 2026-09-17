@@ -1,0 +1,155 @@
+.bundleflow-widget {
+  max-width: 600px;
+  margin: 26px auto;
+  color: var(--bf-text);
+  font-family: Arial, sans-serif;
+}
+.bundleflow-widget__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  margin-bottom: 20px;
+}
+.bundleflow-widget__header:before,
+.bundleflow-widget__header:after {
+  content: "";
+  height: 1.5px;
+  background: #a9a9a9;
+  flex: 1;
+}
+.bundleflow-widget__header h2 {
+  font-size: var(--bf-heading-size);
+  font-weight: 800;
+  margin: 0;
+  white-space: nowrap;
+}
+.bundleflow-widget__list {
+  display: grid;
+  gap: 7px;
+}
+.bf-offer {
+  background: var(--bf-card);
+  border: 1px solid #aaa;
+  border-radius: var(--bf-radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: 0.15s;
+}
+.bf-offer.is-selected {
+  background: var(--bf-selected);
+  border: var(--bf-border-width) solid var(--bf-border);
+}
+.bf-offer__main {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--bf-card-padding);
+}
+.bf-radio {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #aaa;
+  border-radius: 50%;
+  background: #fff;
+  flex: none;
+  position: relative;
+}
+.is-selected .bf-radio {
+  border-color: var(--bf-accent);
+}
+.is-selected .bf-radio:after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--bf-accent);
+}
+.bf-offer__name {
+  flex: 1;
+  min-width: 0;
+}
+.bf-offer__name strong {
+  display: block;
+  font-size: 16px;
+  line-height: 1.2;
+}
+.bf-save {
+  background: var(--bf-badge);
+  border-radius: 10px;
+  padding: 5px 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.bf-price {
+  text-align: right;
+  flex: none;
+  min-width: 82px;
+}
+.bf-price strong,
+.bf-price s {
+  display: block;
+}
+.bf-price strong {
+  font-size: 16px;
+}
+.bf-price s {
+  font-size: 11px;
+  color: #5f6662;
+  margin-top: 3px;
+}
+.bf-gift {
+  background: var(--bf-gift);
+  padding: 13px 16px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.bundleflow-submit {
+  width: 100%;
+  height: 48px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bf-button);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+.bundleflow-submit:hover {
+  filter: brightness(0.92);
+}
+.bundleflow-submit:disabled {
+  opacity: 0.6;
+}
+.bundleflow-widget__loading,
+.bundleflow-widget__message {
+  text-align: center;
+  font-size: 12px;
+  color: #66716b;
+}
+.bundleflow-widget__message {
+  margin-top: 8px;
+  font-weight: 600;
+}
+@media (max-width: 620px) {
+  .bundleflow-widget {
+    margin: 20px 12px;
+  }
+  .bf-offer__main {
+    gap: 7px;
+  }
+  .bf-offer__name strong {
+    font-size: 14px;
+  }
+  .bf-save {
+    padding: 4px 6px;
+    font-size: 9px;
+  }
+  .bf-price {
+    min-width: 70px;
+  }
+  .bf-price strong {
+    font-size: 14px;
+  }
+}

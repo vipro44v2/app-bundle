@@ -1,0 +1,20 @@
+{
+  "/api/auth/callback/route": "/api/auth/callback",
+  "/api/auth/route": "/api/auth",
+  "/api/bundles/route": "/api/bundles",
+  "/api/bundles/[id]/route": "/api/bundles/[id]",
+  "/api/dashboard/route": "/api/dashboard",
+  "/api/shopify/products/route": "/api/shopify/products",
+  "/api/shopify/webhooks/route": "/api/shopify/webhooks",
+  "/api/storefront/bundles/route": "/api/storefront/bundles",
+  "/page": "/",
+  "/plan/page": "/plan",
+  "/suggest-feature/page": "/suggest-feature",
+  "/translations/page": "/translations",
+  "/settings/page": "/settings",
+  "/bundles/new/page": "/bundles/new",
+  "/dashboard/page": "/dashboard",
+  "/bundles/page": "/bundles",
+  "/bundles/[id]/edit/page": "/bundles/[id]/edit",
+  "/_not-found/page": "/_not-found"
+}

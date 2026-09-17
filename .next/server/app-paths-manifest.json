@@ -1,0 +1,20 @@
+{
+  "/api/auth/callback/route": "app/api/auth/callback/route.js",
+  "/api/auth/route": "app/api/auth/route.js",
+  "/api/bundles/route": "app/api/bundles/route.js",
+  "/api/bundles/[id]/route": "app/api/bundles/[id]/route.js",
+  "/api/dashboard/route": "app/api/dashboard/route.js",
+  "/api/shopify/products/route": "app/api/shopify/products/route.js",
+  "/api/shopify/webhooks/route": "app/api/shopify/webhooks/route.js",
+  "/api/storefront/bundles/route": "app/api/storefront/bundles/route.js",
+  "/page": "app/page.js",
+  "/plan/page": "app/plan/page.js",
+  "/suggest-feature/page": "app/suggest-feature/page.js",
+  "/translations/page": "app/translations/page.js",
+  "/settings/page": "app/settings/page.js",
+  "/bundles/new/page": "app/bundles/new/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/bundles/page": "app/bundles/page.js",
+  "/bundles/[id]/edit/page": "app/bundles/[id]/edit/page.js",
+  "/_not-found/page": "app/_not-found/page.js"
+}
